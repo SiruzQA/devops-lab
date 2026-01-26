@@ -1,20 +1,126 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: lab-nginx
+  name: myapp-deployment
+  labels:
+    app: myapp
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: lab-nginx
+      app: myapp
   template:
     metadata:
       labels:
-        app: lab-nginx
+        app: myapp
     spec:
       containers:
-        - name: nginx
-          image: lab-nginx:latest
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 80
+      - name: myapp
+        image: myapp:latest
+        imagePullPolicy: Never  # Local image üçün
+        ports:
+        - containerPort: 80
+          name: http
+        
+        # Liveness Probe - Container işləyirsə yoxlayır
+        # Əgər fail olarsa, kubelet container-i restart edir
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10  # İlk yoxlamadan əvvəl gözləmə
+          periodSeconds: 10        # Hər 10 saniyədə bir yoxla
+          timeoutSeconds: 5        # 5 saniyə timeout
+          failureThreshold: 3      # 3 dəfə fail olsa restart et
+          successThreshold: 1
+        
+        # Readiness Probe - Container trafikə hazırdır yoxlamaq üçün
+        # Fail olarsa, Service-dən çıxarılır (traffic almır)
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        
+        # Startup Probe - Slow başlayan containerlar üçün (optional)
+        # Başlamadan əvvəl digər probe-lar işləmir
+        startupProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30     # 30*5=150 saniyə (2.5 dəqiqə) başlamaq vaxtı
+          successThreshold: 1
+        
+        # Resource limits və requests
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        
+        # Environment variables (optional)
+        env:
+        - name: APP_ENV
+          value: "production"
+        - name: LOG_LEVEL
+          value: "info"
+
+---
+# Rolling Update Strategy konfiqurasiyası
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-deployment-rolling
+  labels:
+    app: myapp
+    version: v2
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1  # Update zamanı maksimum 1 pod unavailable
+      maxSurge: 1        # Maksimum 1 əlavə pod yarada bilər
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+        version: v2
+    spec:
+      containers:
+      - name: myapp
+        image: myapp:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 80
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"

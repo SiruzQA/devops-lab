@@ -1,0 +1,218 @@
+name: K3s Platform QA Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Manual trigger imkanı
+
+jobs:
+  qa-tests:
+    name: Platform QA Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pyyaml
+    
+    - name: Install K3s
+      run: |
+        curl -sfL https://get.k3s.io | sh -
+        sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+        mkdir -p ~/.kube
+        sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+        sudo chown $USER ~/.kube/config
+        
+        # K3s tam hazır olana qədər gözlə
+        timeout 120 bash -c 'until kubectl get nodes | grep -q "Ready"; do sleep 2; done'
+        
+        echo "K3s installed successfully"
+        kubectl get nodes
+    
+    - name: Build Docker Image
+      run: |
+        cd docker
+        docker build -t myapp:latest .
+        echo "Docker image built successfully"
+    
+    - name: Import Image to K3s
+      run: |
+        # K3s containerd-ə image import et
+        docker save myapp:latest -o /tmp/myapp.tar
+        sudo k3s ctr images import /tmp/myapp.tar
+        sudo k3s ctr images ls | grep myapp
+    
+    - name: Deploy to K3s
+      run: |
+        cd k3s
+        
+        # Deployment
+        kubectl apply -f deployment.yaml
+        
+        # Service
+        kubectl apply -f service.yaml
+        
+        # Ingress
+        kubectl apply -f ingress.yaml
+        
+        echo "Resources deployed to K3s"
+        
+        # Pod-ların ready olmasını gözlə (maksimum 2 dəqiqə)
+        kubectl wait --for=condition=ready pod -l app=myapp --timeout=120s || true
+        
+        # Status
+        kubectl get pods,svc,ingress
+    
+    - name: Run Health Check Tests
+      id: health_tests
+      run: |
+        python tests/k3s_qa_tests.py
+      continue-on-error: true
+    
+    - name: Run Ingress Routing Tests
+      id: routing_tests
+      run: |
+        # Ingress controller hazır olmasını gözlə
+        sleep 10
+        
+        # Traefik ingress controller yoxla
+        kubectl get pods -n kube-system | grep traefik || echo "Traefik not found"
+        
+        # Test routing
+        echo "Testing ingress routing..."
+        python tests/k3s_qa_tests.py
+      continue-on-error: true
+    
+    - name: Collect Logs on Failure
+      if: failure()
+      run: |
+        echo "=== Pod Status ==="
+        kubectl get pods -o wide
+        
+        echo "=== Pod Descriptions ==="
+        kubectl describe pods
+        
+        echo "=== Pod Logs ==="
+        for pod in $(kubectl get pods -o name); do
+          echo "Logs for $pod:"
+          kubectl logs $pod || echo "No logs available"
+        done
+        
+        echo "=== Service Status ==="
+        kubectl get svc -o wide
+        
+        echo "=== Ingress Status ==="
+        kubectl get ingress -o wide
+        
+        echo "=== Events ==="
+        kubectl get events --sort-by='.lastTimestamp'
+    
+    - name: Generate Test Report
+      if: always()
+      run: |
+        echo "## QA Test Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.health_tests.outcome }}" == "success" ]; then
+          echo "✅ Health Check Tests: PASSED" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Health Check Tests: FAILED" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ steps.routing_tests.outcome }}" == "success" ]; then
+          echo "✅ Routing Tests: PASSED" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Routing Tests: FAILED" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Pod Status" >> $GITHUB_STEP_SUMMARY
+        kubectl get pods -o wide >> $GITHUB_STEP_SUMMARY || true
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        kubectl delete -f k3s/deployment.yaml --ignore-not-found=true
+        kubectl delete -f k3s/service.yaml --ignore-not-found=true
+        kubectl delete -f k3s/ingress.yaml --ignore-not-found=true
+
+  scaling-tests:
+    name: Scaling and Load Tests
+    runs-on: ubuntu-latest
+    needs: qa-tests
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+    
+    - name: Install K3s
+      run: |
+        curl -sfL https://get.k3s.io | sh -
+        sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+        mkdir -p ~/.kube
+        sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+        sudo chown $USER ~/.kube/config
+        timeout 120 bash -c 'until kubectl get nodes | grep -q "Ready"; do sleep 2; done'
+    
+    - name: Build and Deploy
+      run: |
+        cd docker
+        docker build -t myapp:latest .
+        docker save myapp:latest -o /tmp/myapp.tar
+        sudo k3s ctr images import /tmp/myapp.tar
+        
+        cd ../k3s
+        kubectl apply -f deployment.yaml
+        kubectl apply -f service.yaml
+        kubectl wait --for=condition=ready pod -l app=myapp --timeout=120s
+    
+    - name: Test Horizontal Scaling
+      run: |
+        echo "=== Initial Pod Count ==="
+        kubectl get pods | grep myapp | wc -l
+        
+        echo "=== Scaling to 5 replicas ==="
+        kubectl scale deployment myapp-deployment --replicas=5
+        kubectl wait --for=condition=ready pod -l app=myapp --timeout=120s
+        
+        POD_COUNT=$(kubectl get pods | grep myapp | grep Running | wc -l)
+        echo "Pod count after scaling: $POD_COUNT"
+        
+        if [ "$POD_COUNT" -eq 5 ]; then
+          echo "✅ Scaling test PASSED"
+        else
+          echo "❌ Scaling test FAILED"
+          exit 1
+        fi
+        
+        echo "=== Scaling back to 3 replicas ==="
+        kubectl scale deployment myapp-deployment --replicas=3
+        sleep 10
+        kubectl get pods
+    
+    - name: Test Rolling Update
+      run: |
+        echo "=== Testing Rolling Update ==="
+        
+        # Hazırkı image-i update et (tag dəyişdir)
+        kubectl set image deployment/myapp-deployment myapp=myapp:v2 || true
+        
+        # Update prosesini izlə
+        kubectl rollout status deployment/myapp-deployment --timeout=120s || true
+        
+        echo "=== Rollout History ==="
+        kubectl rollout history deployment/myapp-deployment
+        
+        echo "=== Current Pods ==="
+        kubectl get pods -l app=myapp
