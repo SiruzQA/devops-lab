@@ -7,3 +7,22 @@ dolab.pub
 dolab
 dolab.pub
 @github.com
+# Test results
+tests/__pycache__/
+tests/.pytest_cache/
+*.pyc
+
+# K3s
+k3s/secrets.yaml
+*.kubeconfig
+
+# Docker
+*.tar
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp

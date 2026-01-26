@@ -1,0 +1,11 @@
+.git
+.github
+tests
+docs
+scripts
+*.md
+.gitignore
+*.tar
+*.log
+__pycache__
+.pytest_cache
