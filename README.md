@@ -1,10 +1,8 @@
-# K3s Platform QA Testing Guide
 
-## 📋 Ümumi Baxış
+K3s Platform QA Testing Guide
+Bu layihə K3s üzərində çalışan tətbiqlər üçün platform səviyyəli QA testlərinin necə aparıldığını göstərir. Məqsəd real deploy-dan sonra sistemin davranışını yoxlamaq, routing və health check-ləri doğrulamaq və CI/CD axınında avtomatik test dəstəyi təmin etməkdir.
 
-Bu sənəd K3s cluster-də platform QA testlərinin necə işlədiyini və istifadə qaydalarını izah edir.
-
-## 🎯 Test Coverage
+## Test Coverage
 
 ### 1. Health Check Tests
 - ✅ K3s servisinin işlək olması
@@ -27,9 +25,9 @@ Bu sənəd K3s cluster-də platform QA testlərinin necə işlədiyini və istif
 - ✅ Resource limit testləri
 - ✅ Pod restart davranışı
 
-## 🚀 İstifadə Qaydası
+## İstifadə Qaydası
 
-### Lokal Test İcra
+### Lokal Test İcrası
 
 1. **Test skriptini hazırla**
 ```bash
@@ -97,7 +95,7 @@ CI/CD pipeline avtomatik işləyir:
 ✓ PASSED - Probes: myapp-deployment-abc123/myapp
   └─ Liveness: True, Readiness: True
 
-=== TEST COVERAGE REPORT ===
+== TEST COVERAGE REPORT ==
 Health Checks: 8 passed, 0 failed
 Routing Tests: 5 passed, 0 failed
 
@@ -109,14 +107,14 @@ Coverage: 100.0%
 
 ### Failed Test Output Nümunəsi
 ```
-✗ FAILED - Pod Ready: myapp-deployment-xyz789
-  └─ Phase: Pending, Ready: False
+FAILED - Pod Ready: myapp-deployment-xyz789
+ └─ Phase: Pending, Ready: False
 
-✗ FAILED - Service Endpoints: myapp-service
+ FAILED - Service Endpoints: myapp-service
   └─ Active endpoints: 0
 ```
 
-## 🔍 Debugging
+##  Debugging
 
 ### Pod-lar Ready olmursa
 
