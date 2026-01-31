@@ -272,8 +272,8 @@ jobs:
         sleep 5
         
         # Yalnız myapp-deployment-in pod-larını say (replicaset hash ilə)
-        POD_COUNT=$(kubectl get pods -l app=myapp -o jsonpath='{range .items[*]}{.metadata.ownerReferences[0].name}{"\n"}{end}' | grep "^myapp-deployment-" | wc -l)
         
+       POD_COUNT=$(kubectl get pods -l app=myapp --no-headers | grep myapp-deployment- | wc -l) 
         echo "Pod count after scaling: $POD_COUNT"
         echo "Expected: 5"
         
