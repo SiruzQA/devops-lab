@@ -11,16 +11,16 @@ jobs:
   qa-tests:
     name: Platform QA Tests
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout Code
       uses: actions/checkout@v3
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-    
+
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
@@ -51,7 +51,17 @@ jobs:
         # K3s containerd-ə image import et
         docker save myapp:latest -o /tmp/myapp.tar
         sudo k3s ctr images import /tmp/myapp.tar
+        
+        # Image düzgün import olduğunu yoxla
+        echo "Verifying image in K3s containerd:"
         sudo k3s ctr images ls | grep myapp
+        
+        if ! sudo k3s ctr images ls | grep -q myapp; then
+          echo "ERROR: Image not found in K3s containerd!"
+          exit 1
+        fi
+        
+        echo "✅ Image successfully imported to K3s"
     
     - name: Deploy to K3s
       run: |
@@ -68,10 +78,33 @@ jobs:
         
         echo "Resources deployed to K3s"
         
-        # Pod-ların ready olmasını gözlə (maksimum 2 dəqiqə)
-        kubectl wait --for=condition=ready pod -l app=myapp --timeout=120s || true
+        # Pod-ların yaranmasını gözlə (max 30 saniyə)
+        echo "Waiting for pods to be created..."
+        for i in {1..30}; do
+          POD_COUNT=$(kubectl get pods -l app=myapp --no-headers 2>/dev/null | wc -l)
+          if [ "$POD_COUNT" -gt 0 ]; then
+            echo "✅ Pods created (found $POD_COUNT pods)"
+            break
+          fi
+          echo "Waiting for pods... ($i/30)"
+          sleep 1
+        done
+        
+        # Pod yaranmadısa, debug info göstər
+        if [ "$POD_COUNT" -eq 0 ]; then
+          echo "❌ ERROR: No pods were created!"
+          echo "=== Deployment Status ==="
+          kubectl get deployment myapp-deployment -o wide
+          echo "=== Events ==="
+          kubectl get events --sort-by='.lastTimestamp' | tail -20
+          exit 1
+        fi
+        
+        # İndi deployment-in ready olmasını gözlə
+        kubectl rollout status deployment/myapp-deployment --timeout=120s
         
         # Status
+        echo "=== Final Status ==="
         kubectl get pods,svc,ingress
     
     - name: Run Health Check Tests
@@ -79,7 +112,7 @@ jobs:
       run: |
         python tests/k3s_qa_tests.py
       continue-on-error: true
-    
+
     - name: Run Ingress Routing Tests
       id: routing_tests
       run: |
@@ -93,7 +126,7 @@ jobs:
         echo "Testing ingress routing..."
         python tests/k3s_qa_tests.py
       continue-on-error: true
-    
+
     - name: Collect Logs on Failure
       if: failure()
       run: |
@@ -151,11 +184,11 @@ jobs:
     name: Scaling and Load Tests
     runs-on: ubuntu-latest
     needs: qa-tests
-    
+
     steps:
     - name: Checkout Code
       uses: actions/checkout@v3
-    
+
     - name: Install K3s
       run: |
         curl -sfL https://get.k3s.io | sh -
@@ -172,10 +205,26 @@ jobs:
         docker save myapp:latest -o /tmp/myapp.tar
         sudo k3s ctr images import /tmp/myapp.tar
         
+        # Image yoxla
+        sudo k3s ctr images ls | grep myapp
+        
         cd ../k3s
         kubectl apply -f deployment.yaml
         kubectl apply -f service.yaml
-        kubectl wait --for=condition=ready pod -l app=myapp --timeout=120s
+        
+        # Pod-ların yaranmasını yoxla
+        echo "Waiting for pods to be created..."
+        for i in {1..30}; do
+          POD_COUNT=$(kubectl get pods -l app=myapp --no-headers 2>/dev/null | wc -l)
+          if [ "$POD_COUNT" -gt 0 ]; then
+            echo "✅ Pods created"
+            break
+          fi
+          sleep 1
+        done
+        
+        # Deployment ready olmasını gözlə
+        kubectl rollout status deployment/myapp-deployment --timeout=120s
     
     - name: Test Horizontal Scaling
       run: |
@@ -187,8 +236,8 @@ jobs:
         echo "=== Scaling to 5 replicas ==="
         kubectl scale deployment/$DEPLOYMENT_NAME --replicas=5
         
-        kubectl wait --for=condition=ready pod -l app=myapp --timeout=180s || {
-          echo "⚠️  Pods not ready, checking status..."
+        kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=180s || {
+          echo "⚠️  Scaling failed, checking status..."
           kubectl get pods -l app=myapp
           kubectl describe pods -l app=myapp | tail -20
         }
@@ -229,4 +278,4 @@ jobs:
         echo "=== Current Pods ==="
         kubectl get pods -l app=myapp
         
-        echo "✅ Rolling update test completed"
+        echo "✅ Rolling update test completed
