@@ -302,7 +302,8 @@ jobs:
         DEPLOYMENT_NAME="myapp-deployment"
         
         # Annotation əlavə edə bilə rolling update trigger et
-        kubectl annotate deployment/$DEPLOYMENT_NAME test-rollout="$(date +%s)" --overwrite
+        TIMESTAMP=$(date +%s)
+        kubectl annotate deployment/$DEPLOYMENT_NAME test-rollout=$TIMESTAMP --overwrite
         
         # Rolling update tamamlanana qədər gözlə
         kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=120s || {
