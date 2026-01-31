@@ -307,7 +307,7 @@ jobs:
         
         # Rolling update tamamlanana qədər gözlə
         kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=120s || {
-          echo "⚠️  Rollout did not complete in time"
+          echo "WARNING: Rollout did not complete in time"
         }
         
         # Rolling update tarixini göstər
@@ -317,7 +317,7 @@ jobs:
         echo "=== Current Pods ==="
         kubectl get pods -l app=myapp
         
-        echo "✅ Rolling update test completed"
+        echo "Rolling update test completed"
     
     - name: Cleanup
       if: always()
