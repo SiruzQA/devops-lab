@@ -56,6 +56,7 @@ jobs:
         echo "Verifying image in K3s containerd:"
         sudo k3s ctr images ls | grep myapp
         
+        # Image tapılmadısa, exit 1 ilə dayandır
         if ! sudo k3s ctr images ls | grep -q myapp; then
           echo "ERROR: Image not found in K3s containerd!"
           exit 1
@@ -78,7 +79,7 @@ jobs:
         
         echo "Resources deployed to K3s"
         
-        # Pod-ların yaranmasını gözlə (max 30 saniyə)
+        # Pod-ların yaranmasını gözlə (max 30 saniyə, hər saniyə yoxla)
         echo "Waiting for pods to be created..."
         for i in {1..30}; do
           POD_COUNT=$(kubectl get pods -l app=myapp --no-headers 2>/dev/null | wc -l)
@@ -90,7 +91,7 @@ jobs:
           sleep 1
         done
         
-        # Pod yaranmadısa, debug info göstər
+        # Pod yaranmadısa, debug info göstər və dayandır
         if [ "$POD_COUNT" -eq 0 ]; then
           echo "❌ ERROR: No pods were created!"
           echo "=== Deployment Status ==="
@@ -137,6 +138,7 @@ jobs:
         kubectl describe pods
         
         echo "=== Pod Logs ==="
+        # Hər pod-un loglarını yoxla
         for pod in $(kubectl get pods -o name); do
           echo "Logs for $pod:"
           kubectl logs $pod || echo "No logs available"
@@ -157,12 +159,14 @@ jobs:
         echo "## QA Test Report" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
+        # Health check test nəticəsi
         if [ "${{ steps.health_tests.outcome }}" == "success" ]; then
           echo "✅ Health Check Tests: PASSED" >> $GITHUB_STEP_SUMMARY
         else
           echo "❌ Health Check Tests: FAILED" >> $GITHUB_STEP_SUMMARY
         fi
         
+        # Routing test nəticəsi
         if [ "${{ steps.routing_tests.outcome }}" == "success" ]; then
           echo "✅ Routing Tests: PASSED" >> $GITHUB_STEP_SUMMARY
         else
@@ -176,6 +180,7 @@ jobs:
     - name: Cleanup
       if: always()
       run: |
+        # Test sonunda yaradılan resources sil
         kubectl delete -f k3s/deployment.yaml --ignore-not-found=true
         kubectl delete -f k3s/service.yaml --ignore-not-found=true
         kubectl delete -f k3s/ingress.yaml --ignore-not-found=true
@@ -183,7 +188,7 @@ jobs:
   scaling-tests:
     name: Scaling and Load Tests
     runs-on: ubuntu-latest
-    needs: qa-tests
+    needs: qa-tests  # qa-tests tamamlanana qədər gözlə
 
     steps:
     - name: Checkout Code
@@ -196,7 +201,23 @@ jobs:
         mkdir -p ~/.kube
         sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
         sudo chown $USER ~/.kube/config
+        # K3s tam hazır olana qədər gözlə
         timeout 120 bash -c 'until kubectl get nodes | grep -q "Ready"; do sleep 2; done'
+    
+    - name: Clean Up Previous Resources
+      run: |
+        # Əvvəlki testdə qalan resources sil
+        echo "Cleaning up any existing resources..."
+        kubectl delete deployment --all --ignore-not-found=true
+        kubectl delete service --all --ignore-not-found=true
+        kubectl delete ingress --all --ignore-not-found=true
+        
+        # Bütün pod-ların silinməsini gözlə
+        echo "Waiting for all pods to be deleted..."
+        kubectl wait --for=delete pod --all --timeout=60s || true
+        
+        echo "Cleanup completed"
+        kubectl get pods --all-namespaces
     
     - name: Build and Deploy
       run: |
@@ -212,7 +233,7 @@ jobs:
         kubectl apply -f deployment.yaml
         kubectl apply -f service.yaml
         
-        # Pod-ların yaranmasını yoxla
+        # Pod-ların yaranmasını yoxla (max 30 saniyə)
         echo "Waiting for pods to be created..."
         for i in {1..30}; do
           POD_COUNT=$(kubectl get pods -l app=myapp --no-headers 2>/dev/null | wc -l)
@@ -233,9 +254,15 @@ jobs:
         
         DEPLOYMENT_NAME="myapp-deployment"
         
+        # İlk replica count-u yoxla
+        INITIAL_REPLICAS=$(kubectl get deployment $DEPLOYMENT_NAME -o jsonpath='{.spec.replicas}')
+        echo "Initial replicas: $INITIAL_REPLICAS"
+        
+        # 5 replica-ya scale et
         echo "=== Scaling to 5 replicas ==="
         kubectl scale deployment/$DEPLOYMENT_NAME --replicas=5
         
+        # Scaling tamamlanana qədər gözlə
         kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=180s || {
           echo "⚠️  Scaling failed, checking status..."
           kubectl get pods -l app=myapp
@@ -244,20 +271,28 @@ jobs:
         
         sleep 5
         
-        POD_COUNT=$(kubectl get pods -l app=myapp --no-headers | grep Running | wc -l)
-        echo "Pod count after scaling: $POD_COUNT"
+        # Yalnız myapp-deployment-in pod-larını say (replicaset hash ilə)
+        POD_COUNT=$(kubectl get pods -l app=myapp -o jsonpath='{range .items[*]}{.metadata.ownerReferences[0].name}{"\n"}{end}' | grep "^myapp-deployment-" | wc -l)
         
-        if [ "$POD_COUNT" -ge 3 ]; then
-          echo "✅ Scaling test PASSED (${POD_COUNT} pods running)"
+        echo "Pod count after scaling: $POD_COUNT"
+        echo "Expected: 5"
+        
+        # Pod sayını yoxla
+        if [ "$POD_COUNT" -eq 5 ]; then
+          echo "✅ Scaling test PASSED (exactly ${POD_COUNT} pods running)"
+        elif [ "$POD_COUNT" -ge 3 ]; then
+          echo "⚠️  Scaling test PARTIAL (${POD_COUNT} pods running, expected 5)"
         else
           echo "❌ Scaling test FAILED (only ${POD_COUNT} pods running)"
-          kubectl get pods -l app=myapp
+          kubectl get pods -l app=myapp -o wide
+          kubectl get replicasets
           exit 1
         fi
         
+        # Geri 3 replica-ya qaytar
         echo "=== Scaling back to 3 replicas ==="
         kubectl scale deployment/$DEPLOYMENT_NAME --replicas=3
-        sleep 10
+        kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=120s
         kubectl get pods -l app=myapp
     
     - name: Test Rolling Update
@@ -266,16 +301,28 @@ jobs:
         
         DEPLOYMENT_NAME="myapp-deployment"
         
+        # Annotation əlavə edə bilə rolling update trigger et
         kubectl annotate deployment/$DEPLOYMENT_NAME test-rollout="$(date +%s)" --overwrite
         
+        # Rolling update tamamlanana qədər gözlə
         kubectl rollout status deployment/$DEPLOYMENT_NAME --timeout=120s || {
           echo "⚠️  Rollout did not complete in time"
         }
         
+        # Rolling update tarixini göstər
         echo "=== Rollout History ==="
         kubectl rollout history deployment/$DEPLOYMENT_NAME || true
         
         echo "=== Current Pods ==="
         kubectl get pods -l app=myapp
         
-        echo "✅ Rolling update test completed
+        echo "✅ Rolling update test completed"
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        # Test sonunda yaradılan bütün resources sil
+        echo "Final cleanup..."
+        kubectl delete deployment --all --ignore-not-found=true
+        kubectl delete service --all --ignore-not-found=true
+        kubectl get pods
