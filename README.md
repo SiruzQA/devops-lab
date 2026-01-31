@@ -1,5 +1,10 @@
 
 K3s Platform QA Testing Guide
+
+![K3s Platform QA Pipeline](https://github.com/SiruzQA/devops-lab/workflows/K3s%20Platform%20QA%20Pipeline/badge.svg)
+![CI Status](https://img.shields.io/github/actions/workflow/status/SiruzQA/devops-lab/qa-pipeline.yml?branch=main&label=CI%2FCD)
+
+
 Bu layihə K3s üzərində çalışan tətbiqlər üçün platform səviyyəli QA testlərinin necə aparıldığını göstərir. Məqsəd real deploy-dan sonra sistemin davranışını yoxlamaq, routing və health check-ləri doğrulamaq və CI/CD axınında avtomatik test dəstəyi təmin etməkdir.
 
 ## Test Coverage
